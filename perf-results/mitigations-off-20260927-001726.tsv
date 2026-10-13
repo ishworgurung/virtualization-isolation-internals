@@ -1,0 +1,40 @@
+# label: mitigations-off
+# date: 2026-09-27T00:17:26+05:45
+# kernel: 7.2.3-2-MANJARO
+# cmdline: BOOT_IMAGE=/vmlinuz-7.2-x86_64 root=UUID=<uuid> rw cryptdevice=UUID=<uuid>:luks-<uuid> root=/dev/mapper/luks-<uuid> udev.log_priority=3 nvidia-drm.modeset=1 mitigations=off reg_file_data_sampling=off isolcpus=domain,managed_irq,4-7 nohz_full=4-7 rcu_nocbs=4-7 irqaffinity=0-3,8-23 intel_idle.max_cstate=2
+# cpu: 12th Gen Intel(R) Core(TM) i9-12900K
+# microcode: 0x3e
+# governor: 16 performance
+# epp: 16 performance
+# turbo: on
+# smt: off
+# power_limit_w: 170
+# pinning: single=4 pair=0,2
+# reps: 5 stress_s: 5
+# vulnerabilities: gather_data_sampling=Not affected; ghostwrite=Not affected; indirect_target_selection=Not affected; itlb_multihit=Not affected; l1tf=Not affected; mds=Not affected; meltdown=Not affected; mmio_stale_data=Not affected; old_microcode=Not affected; reg_file_data_sampling=Vulnerable; retbleed=Not affected; spec_rstack_overflow=Not affected; spec_store_bypass=Vulnerable; spectre_v1=Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers; spectre_v2=Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Vulnerable; BHI: Vulnerable; srbds=Not affected; tsa=Not affected; tsx_async_abort=Not affected; vmscape=Vulnerable; 
+syscall_getppid	kernel	ns	lower	83.47,83.54,83.41,83.33,83.29
+null_write_ops	kernel	ops/s	higher	1012732.04,1012435.04,1012907.75,1009761.65,1012525.87
+context_switch_pipe	kernel	us	lower	1.104755,1.107930,1.107605,1.114605,1.099150
+switch_ops	kernel	ops/s	higher	666592.11,672798.30,669201.61,677864.25,672539.78
+page_fault_ops	kernel	ops/s	higher	51681.38,51818.21,50780.96,51490.70,50833.80
+fork_ops	kernel	ops/s	higher	8317.87,8448.99,8567.50,8377.42,8519.22
+exec_ops	kernel	ops/s	higher	583.76,587.10,589.84,588.03,590.98
+pipe_ops	kernel	ops/s	higher	2105572.35,2094678.82,2095519.14,2091773.85,2090358.06
+futex_ops	kernel	ops/s	higher	308003.30,308995.99,310495.83,311579.21,310039.07
+signal_queue_ops	kernel	ops/s	higher	799401.24,798182.29,798903.27,797090.93,798499.34
+mmap_ops	kernel	ops/s	higher	72.57,75.78,74.16,72.59,75.58
+read_loop_ops	kernel	ops/s	higher	11836458,11826701,11815584,11968874,11831894
+io_uring_batch_ops	kernel	ops/s	higher	17224219,17172382,17240112,17252321,16990699
+io_uring_sqpoll_ops	kernel	ops/s	higher	17358041,17344470,17569146,17590186,17313703
+kvm_exit_heavy_io	kvm	ns	lower	880,879,880,877,880
+kvm_exit_light_cpuid	kvm	ns	lower	338,338,338,338,338
+kvm_exit_light_vmcall	kvm	ns	lower	334,335,334,335,335
+kick_pipelined_classic	kvm	us	lower	12.1,12.08,12.09,12.09,12.11
+kick_pipelined_fast	kvm	us	lower	11.22,11.2,11.21,11.24,11.19
+kick_pingpong_classic	kvm	us	lower	2.05,2.05,2.06,2.08,2.06
+kick_pingpong_fast	kvm	us	lower	3.28,3.33,3.35,3.35,3.27
+shell_forkexec_2000	real	ms	lower	437.329,438.343,440.543,444.747,437.129
+tar_usr_share_man	real	ms	lower	99.935,100.025,100.438,99.779,99.723
+gcc_compile_x10	real	ms	lower	490.202,489.102,489.587,489.460,490.754
+cpu_matrixprod_ops	control	ops/s	higher	3641.74,3642.00,3642.59,3627.36,3642.96
+memcpy_256MB	control	GB/s	higher	14.116000,14.063273,14.054735,14.129722,14.088317

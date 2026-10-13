@@ -1,0 +1,340 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/lib.rs`."><title>lib.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="lockfree" data-themes="" data-resource-suffix="" data-rustdoc-version="1.101.0-nightly (32dba69d6 2026-10-09)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">lockfree/</div>lib.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! # lockfree
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! Small, heavily-commented lock-free building blocks:
+<a href=#4 id=4 data-nosnippet>4</a>//!
+<a href=#5 id=5 data-nosnippet>5</a>//! * [`spsc`]   — bounded single-producer/single-consumer ring (acquire/release,
+<a href=#6 id=6 data-nosnippet>6</a>//!                cached indices, cache-line padding). Same shape as a virtqueue
+<a href=#7 id=7 data-nosnippet>7</a>//!                or an io_uring ring.
+<a href=#8 id=8 data-nosnippet>8</a>//! * [`aba`]    — a Treiber stack that makes the ABA problem reproducible on demand,
+<a href=#9 id=9 data-nosnippet>9</a>//!                and the tagged-pointer fix.
+<a href=#10 id=10 data-nosnippet>10</a>//! * [`padded`] — `CachePadded&lt;T&gt;`, the cure for false sharing.
+<a href=#11 id=11 data-nosnippet>11</a>//!
+<a href=#12 id=12 data-nosnippet>12</a>//! The binaries in `src/bin/` exercise each one:
+<a href=#13 id=13 data-nosnippet>13</a>//! `spsc_bench`, `aba_demo`, `false_sharing`, `litmus`.
+<a href=#14 id=14 data-nosnippet>14</a>//!
+<a href=#15 id=15 data-nosnippet>15</a>//! ## Suggested reading order
+<a href=#16 id=16 data-nosnippet>16</a>//!
+<a href=#17 id=17 data-nosnippet>17</a>//! 1. This file: vocabulary + the bits refresher below.
+<a href=#18 id=18 data-nosnippet>18</a>//! 2. `padded.rs` (short) — what a cache line is.
+<a href=#19 id=19 data-nosnippet>19</a>//! 3. `spsc.rs` — the ring buffer. The most important file.
+<a href=#20 id=20 data-nosnippet>20</a>//! 4. `bin/litmus.rs` — why the orderings in `spsc.rs` matter.
+<a href=#21 id=21 data-nosnippet>21</a>//! 5. `aba.rs` + `bin/aba_demo.rs` — what goes wrong once you need CAS.
+<a href=#22 id=22 data-nosnippet>22</a>//! 6. `bin/false_sharing.rs`, `bin/spsc_bench.rs` — measure it.
+<a href=#23 id=23 data-nosnippet>23</a>//!
+<a href=#24 id=24 data-nosnippet>24</a>//! ## Vocabulary used throughout
+<a href=#25 id=25 data-nosnippet>25</a>//!
+<a href=#26 id=26 data-nosnippet>26</a>//! * **Thread**: an independent flow of execution. Two threads may run at the
+<a href=#27 id=27 data-nosnippet>27</a>//!   *same instant* on two CPU cores, or take turns on one core. Either way, you
+<a href=#28 id=28 data-nosnippet>28</a>//!   cannot predict where one thread is when another looks at shared memory.
+<a href=#29 id=29 data-nosnippet>29</a>//! * **Lock / mutex**: the classic way to share data: "only one thread may be in
+<a href=#30 id=30 data-nosnippet>30</a>//!   here at a time". Simple and correct, but a thread that is paused while
+<a href=#31 id=31 data-nosnippet>31</a>//!   holding the lock (descheduled, page-faulting) stalls everyone waiting on it.
+<a href=#32 id=32 data-nosnippet>32</a>//! * **Lock-free**: threads coordinate through atomic instructions instead of
+<a href=#33 id=33 data-nosnippet>33</a>//!   mutexes, and the system as a whole always makes progress — a thread that
+<a href=#34 id=34 data-nosnippet>34</a>//!   is paused can never block the others.
+<a href=#35 id=35 data-nosnippet>35</a>//! * **Wait-free** (stronger): *every* operation finishes in a bounded number of
+<a href=#36 id=36 data-nosnippet>36</a>//!   its own steps, no matter what other threads do. The SPSC ring is wait-free;
+<a href=#37 id=37 data-nosnippet>37</a>//!   the Treiber stack is only lock-free (a CAS may have to retry).
+<a href=#38 id=38 data-nosnippet>38</a>//! * **Atomic**: a memory access the CPU performs indivisibly (no torn reads or
+<a href=#39 id=39 data-nosnippet>39</a>//!   writes — you never see half of an old value and half of a new one) and that
+<a href=#40 id=40 data-nosnippet>40</a>//!   the compiler may not split, merge or elide. In Rust: `AtomicUsize`,
+<a href=#41 id=41 data-nosnippet>41</a>//!   `AtomicU32`, `AtomicU64`, ... with methods `load`, `store`, `fetch_add`,
+<a href=#42 id=42 data-nosnippet>42</a>//!   `compare_exchange`. (The word means other things in databases and
+<a href=#43 id=43 data-nosnippet>43</a>//!   distributed systems; see [Atomicity in other
+<a href=#44 id=44 data-nosnippet>44</a>//!   contexts](#atomicity-in-other-contexts).)
+<a href=#45 id=45 data-nosnippet>45</a>//! * **Memory ordering** (`Relaxed`, `Acquire`, `Release`, `AcqRel`, `SeqCst`):
+<a href=#46 id=46 data-nosnippet>46</a>//!   rules about which *other* memory accesses become visible to another thread
+<a href=#47 id=47 data-nosnippet>47</a>//!   together with an atomic one. See `spsc.rs` and the `litmus` binary.
+<a href=#48 id=48 data-nosnippet>48</a>//!   - `Relaxed`: "just make this one access atomic; no promises about others".
+<a href=#49 id=49 data-nosnippet>49</a>//!   - `Release` (on a store): "everything I wrote before this is published too".
+<a href=#50 id=50 data-nosnippet>50</a>//!   - `Acquire` (on a load): "if I see a Released value, I also see everything
+<a href=#51 id=51 data-nosnippet>51</a>//!     written before it".
+<a href=#52 id=52 data-nosnippet>52</a>//!   - `AcqRel`: both, for read-modify-write operations such as CAS.
+<a href=#53 id=53 data-nosnippet>53</a>//!   - `SeqCst`: Acquire/Release plus one global order all threads agree on.
+<a href=#54 id=54 data-nosnippet>54</a>//! * **CAS** (compare-and-swap, `compare_exchange` in Rust): "if X still equals
+<a href=#55 id=55 data-nosnippet>55</a>//!   OLD, set it to NEW; tell me whether it worked" — the basic lock-free
+<a href=#56 id=56 data-nosnippet>56</a>//!   read-modify-write building block. It is ONE hardware instruction
+<a href=#57 id=57 data-nosnippet>57</a>//!   (`lock cmpxchg` on x86), so no other thread can sneak in between the
+<a href=#58 id=58 data-nosnippet>58</a>//!   compare and the swap.
+<a href=#59 id=59 data-nosnippet>59</a>//! * **Happens-before**: if A happens-before B, then B sees A's effects.
+<a href=#60 id=60 data-nosnippet>60</a>//!   Within one thread, program order gives you this for free. Across threads,
+<a href=#61 id=61 data-nosnippet>61</a>//!   you only get it through a synchronising pair such as Release → Acquire.
+<a href=#62 id=62 data-nosnippet>62</a>//!
+<a href=#63 id=63 data-nosnippet>63</a>//! ## Atomicity in other contexts
+<a href=#64 id=64 data-nosnippet>64</a>//!
+<a href=#65 id=65 data-nosnippet>65</a>//! "Atomic" is an overloaded word. The common core is always **no observer
+<a href=#66 id=66 data-nosnippet>66</a>//! ever sees a half-done state**; what changes is *who* the observer is and
+<a href=#67 id=67 data-nosnippet>67</a>//! *what* could interrupt the operation halfway.
+<a href=#68 id=68 data-nosnippet>68</a>//!
+<a href=#69 id=69 data-nosnippet>69</a>//! | Context | "Atomic" means | Protects against | Scope |
+<a href=#70 id=70 data-nosnippet>70</a>//! |---|---|---|---|
+<a href=#71 id=71 data-nosnippet>71</a>//! | **CPU / Rust atomics** (this crate) | a single memory access is indivisible; no torn values | other threads running at the same time | one memory location, a few bytes |
+<a href=#72 id=72 data-nosnippet>72</a>//! | **Databases** (the A in ACID) | a transaction's writes happen all-or-nothing | a **crash** mid-transaction | many rows, one database |
+<a href=#73 id=73 data-nosnippet>73</a>//! | **Distributed atomic commit** (two-phase commit, 2PC) | every node commits, or every node aborts | node crashes, lost messages | many machines |
+<a href=#74 id=74 data-nosnippet>74</a>//! | **Atomic broadcast** (a.k.a. total-order broadcast) | every node delivers the same messages in the same order | nodes seeing events in different orders | many machines; equivalent to consensus (Raft, Paxos) |
+<a href=#75 id=75 data-nosnippet>75</a>//! | **Filesystems** ("atomic rename") | readers see the old file or the new one, never a partial one | crash during a write, concurrent readers | one path |
+<a href=#76 id=76 data-nosnippet>76</a>//!
+<a href=#77 id=77 data-nosnippet>77</a>//! **Trap: atomic is not isolated.** ACID atomicity is about *crashes*, not
+<a href=#78 id=78 data-nosnippet>78</a>//! concurrency; concurrency is the **I** (isolation). An "atomic" transaction
+<a href=#79 id=79 data-nosnippet>79</a>//! can still suffer race anomalies, just as a Rust atomic does not order your
+<a href=#80 id=80 data-nosnippet>80</a>//! *other* memory accesses (that is what `Acquire`/`Release` add). In both
+<a href=#81 id=81 data-nosnippet>81</a>//! worlds atomicity is the weaker guarantee, and ordering/isolation is a
+<a href=#82 id=82 data-nosnippet>82</a>//! separate one you must ask for.
+<a href=#83 id=83 data-nosnippet>83</a>//!
+<a href=#84 id=84 data-nosnippet>84</a>//! **Where the worlds meet: linearizability.** Distributed-systems theory has
+<a href=#85 id=85 data-nosnippet>85</a>//! the *atomic register* (Lamport): a shared variable whose every read and
+<a href=#86 id=86 data-nosnippet>86</a>//! write appears to take effect at a single instant somewhere between its call
+<a href=#87 id=87 data-nosnippet>87</a>//! and its return. That property is **linearizability**, which Jepsen calls
+<a href=#88 id=88 data-nosnippet>88</a>//! *atomic consistency*. Operations on a single CPU atomic are linearizable,
+<a href=#89 id=89 data-nosnippet>89</a>//! so an `AtomicU64` is effectively the one-machine, nanosecond-scale version
+<a href=#90 id=90 data-nosnippet>90</a>//! of what etcd or ZooKeeper provide across a cluster in milliseconds. The
+<a href=#91 id=91 data-nosnippet>91</a>//! ring in [`spsc`] and a Raft log are the same idea at very different scales.
+<a href=#92 id=92 data-nosnippet>92</a>//!
+<a href=#93 id=93 data-nosnippet>93</a>//! In one line: on a CPU, "atomic" = indivisible for other threads; in a
+<a href=#94 id=94 data-nosnippet>94</a>//! database, all-or-nothing across a crash; across a cluster, all nodes agree,
+<a href=#95 id=95 data-nosnippet>95</a>//! which needs consensus.
+<a href=#96 id=96 data-nosnippet>96</a>//!
+<a href=#97 id=97 data-nosnippet>97</a>//! ## Refresher: bits, hex, shifts and masks
+<a href=#98 id=98 data-nosnippet>98</a>//!
+<a href=#99 id=99 data-nosnippet>99</a>//! Lock-free code uses a handful of bit tricks. Here they are with numbers.
+<a href=#100 id=100 data-nosnippet>100</a>//!
+<a href=#101 id=101 data-nosnippet>101</a>//! **Binary and hex.** A `u8` has 8 bits; `0b0000_1101` is 13. Hex groups four
+<a href=#102 id=102 data-nosnippet>102</a>//! bits per digit: `0xD` = `0b1101` = 13, `0xFF` = `0b1111_1111` = 255.
+<a href=#103 id=103 data-nosnippet>103</a>//! `u32::MAX` is `0xFFFF_FFFF` (32 ones). Underscores are only for readability.
+<a href=#104 id=104 data-nosnippet>104</a>//!
+<a href=#105 id=105 data-nosnippet>105</a>//! **AND `&amp;`** keeps a bit only if it is 1 in *both* inputs. Used to *extract*
+<a href=#106 id=106 data-nosnippet>106</a>//! or *test* bits:
+<a href=#107 id=107 data-nosnippet>107</a>//!
+<a href=#108 id=108 data-nosnippet>108</a>//! ```text
+<a href=#109 id=109 data-nosnippet>109</a>//!     13 = 0b1101
+<a href=#110 id=110 data-nosnippet>110</a>//!   &amp;  7 = 0b0111
+<a href=#111 id=111 data-nosnippet>111</a>//!   -------------
+<a href=#112 id=112 data-nosnippet>112</a>//!      5 = 0b0101      (the top bit was "masked off")
+<a href=#113 id=113 data-nosnippet>113</a>//! ```
+<a href=#114 id=114 data-nosnippet>114</a>//!
+<a href=#115 id=115 data-nosnippet>115</a>//! **OR `|`** sets a bit if it is 1 in *either* input. Used to *combine* fields
+<a href=#116 id=116 data-nosnippet>116</a>//! that occupy different bits:
+<a href=#117 id=117 data-nosnippet>117</a>//!
+<a href=#118 id=118 data-nosnippet>118</a>//! ```text
+<a href=#119 id=119 data-nosnippet>119</a>//!     0b1100_0000
+<a href=#120 id=120 data-nosnippet>120</a>//!   | 0b0000_0011
+<a href=#121 id=121 data-nosnippet>121</a>//!   -------------
+<a href=#122 id=122 data-nosnippet>122</a>//!     0b1100_0011      (neither side overwrote the other)
+<a href=#123 id=123 data-nosnippet>123</a>//! ```
+<a href=#124 id=124 data-nosnippet>124</a>//!
+<a href=#125 id=125 data-nosnippet>125</a>//! **Left shift `&lt;&lt;`** moves bits towards the high end, filling with zeros.
+<a href=#126 id=126 data-nosnippet>126</a>//! `x &lt;&lt; n` equals `x * 2^n` (as long as nothing falls off the top):
+<a href=#127 id=127 data-nosnippet>127</a>//! `1 &lt;&lt; 3 = 0b1000 = 8`, `5 &lt;&lt; 32 = 0x0000_0005_0000_0000`.
+<a href=#128 id=128 data-nosnippet>128</a>//!
+<a href=#129 id=129 data-nosnippet>129</a>//! **Right shift `&gt;&gt;`** moves bits towards the low end; the low bits fall off.
+<a href=#130 id=130 data-nosnippet>130</a>//! `x &gt;&gt; n` equals `x / 2^n` rounded down: `13 &gt;&gt; 2 = 3`, and
+<a href=#131 id=131 data-nosnippet>131</a>//! `0x0000_0005_0000_0002 &gt;&gt; 32 = 5`.
+<a href=#132 id=132 data-nosnippet>132</a>//!
+<a href=#133 id=133 data-nosnippet>133</a>//! **Casting to a narrower type truncates**: `0x0000_0005_0000_0002_u64 as u32`
+<a href=#134 id=134 data-nosnippet>134</a>//! keeps only the low 32 bits → `2`. Casting to a wider type zero-extends.
+<a href=#135 id=135 data-nosnippet>135</a>//!
+<a href=#136 id=136 data-nosnippet>136</a>//! **Powers of two and masks.** If `cap` is a power of two (2, 4, 8, 16...),
+<a href=#137 id=137 data-nosnippet>137</a>//! then `mask = cap - 1` is all ones below it (`8 - 1 = 7 = 0b0111`), and
+<a href=#138 id=138 data-nosnippet>138</a>//! `i &amp; mask == i % cap` for every `i`. `%` (division) costs tens of cycles;
+<a href=#139 id=139 data-nosnippet>139</a>//! `&amp;` costs one. That is why ring buffers insist on power-of-two sizes. It only
+<a href=#140 id=140 data-nosnippet>140</a>//! works for powers of two: `cap = 6` gives `mask = 5 = 0b101`, and `2 &amp; 5 = 0`,
+<a href=#141 id=141 data-nosnippet>141</a>//! not `2`.
+<a href=#142 id=142 data-nosnippet>142</a>//!
+<a href=#143 id=143 data-nosnippet>143</a>//! **Wrapping arithmetic.** Integers have a fixed number of bits, so they wrap:
+<a href=#144 id=144 data-nosnippet>144</a>//! for `u8`, `255 + 1` → `0` and `0 - 1` → `255` (arithmetic mod 256). In
+<a href=#145 id=145 data-nosnippet>145</a>//! debug builds Rust panics on overflow, so code that *wants* wrapping says so:
+<a href=#146 id=146 data-nosnippet>146</a>//! `wrapping_add`, `wrapping_sub`. The useful property: `b.wrapping_sub(a)`
+<a href=#147 id=147 data-nosnippet>147</a>//! is still the true distance from `a` to `b` even if `b` has wrapped past zero
+<a href=#148 id=148 data-nosnippet>148</a>//! (see `spsc.rs` for a worked example).
+<a href=#149 id=149 data-nosnippet>149</a>//!
+<a href=#150 id=150 data-nosnippet>150</a>//! ### Unsigned vs signed integers
+<a href=#151 id=151 data-nosnippet>151</a>//!
+<a href=#152 id=152 data-nosnippet>152</a>//! **The one idea.** A number type is a fixed number of bits, so it has a fixed
+<a href=#153 id=153 data-nosnippet>153</a>//! number of *bit patterns*. 8 bits give 256 patterns, from `0000_0000` to
+<a href=#154 id=154 data-nosnippet>154</a>//! `1111_1111`. The type only decides **which number each pattern means**:
+<a href=#155 id=155 data-nosnippet>155</a>//!
+<a href=#156 id=156 data-nosnippet>156</a>//! * unsigned (`u8`): the patterns mean 0, 1, 2, ..., 255
+<a href=#157 id=157 data-nosnippet>157</a>//! * signed (`i8`): the patterns mean -128, ..., -1, 0, 1, ..., 127
+<a href=#158 id=158 data-nosnippet>158</a>//!
+<a href=#159 id=159 data-nosnippet>159</a>//! The bits in memory are identical. Only the *reading* differs.
+<a href=#160 id=160 data-nosnippet>160</a>//!
+<a href=#161 id=161 data-nosnippet>161</a>//! **A tiny 3-bit world.** 256 rows is too many to draw, so pretend numbers had
+<a href=#162 id=162 data-nosnippet>162</a>//! only 3 bits (8 patterns). Everything below works the same way for 8, 32 or
+<a href=#163 id=163 data-nosnippet>163</a>//! 64 bits.
+<a href=#164 id=164 data-nosnippet>164</a>//!
+<a href=#165 id=165 data-nosnippet>165</a>//! ```text
+<a href=#166 id=166 data-nosnippet>166</a>//!   bits   unsigned   signed
+<a href=#167 id=167 data-nosnippet>167</a>//!   000       0          0
+<a href=#168 id=168 data-nosnippet>168</a>//!   001       1          1
+<a href=#169 id=169 data-nosnippet>169</a>//!   010       2          2
+<a href=#170 id=170 data-nosnippet>170</a>//!   011       3          3
+<a href=#171 id=171 data-nosnippet>171</a>//!   100       4         -4     &lt;- top bit is 1: signed reads it as negative
+<a href=#172 id=172 data-nosnippet>172</a>//!   101       5         -3
+<a href=#173 id=173 data-nosnippet>173</a>//!   110       6         -2
+<a href=#174 id=174 data-nosnippet>174</a>//!   111       7         -1
+<a href=#175 id=175 data-nosnippet>175</a>//! ```
+<a href=#176 id=176 data-nosnippet>176</a>//!
+<a href=#177 id=177 data-nosnippet>177</a>//! **Where the negative numbers come from: place values.** In ordinary binary
+<a href=#178 id=178 data-nosnippet>178</a>//! each bit is worth a power of two. Signed changes just one thing: **the top
+<a href=#179 id=179 data-nosnippet>179</a>//! bit is worth minus** its usual value.
+<a href=#180 id=180 data-nosnippet>180</a>//!
+<a href=#181 id=181 data-nosnippet>181</a>//! ```text
+<a href=#182 id=182 data-nosnippet>182</a>//!                 top
+<a href=#183 id=183 data-nosnippet>183</a>//!   bit worth:    4s   2s   1s
+<a href=#184 id=184 data-nosnippet>184</a>//!   unsigned:    +4   +2   +1
+<a href=#185 id=185 data-nosnippet>185</a>//!   signed:      -4   +2   +1      &lt;- only the top bit's sign changes
+<a href=#186 id=186 data-nosnippet>186</a>//!
+<a href=#187 id=187 data-nosnippet>187</a>//!   101  unsigned:  4 + 0 + 1 =  5
+<a href=#188 id=188 data-nosnippet>188</a>//!        signed:   -4 + 0 + 1 = -3
+<a href=#189 id=189 data-nosnippet>189</a>//!
+<a href=#190 id=190 data-nosnippet>190</a>//!   111  unsigned:  4 + 2 + 1 =  7
+<a href=#191 id=191 data-nosnippet>191</a>//!        signed:   -4 + 2 + 1 = -1
+<a href=#192 id=192 data-nosnippet>192</a>//! ```
+<a href=#193 id=193 data-nosnippet>193</a>//!
+<a href=#194 id=194 data-nosnippet>194</a>//! Same for 8 bits, where the top bit is worth −128 instead of +128:
+<a href=#195 id=195 data-nosnippet>195</a>//!
+<a href=#196 id=196 data-nosnippet>196</a>//! ```text
+<a href=#197 id=197 data-nosnippet>197</a>//!   bit worth:   -128  64  32  16   8   4   2   1
+<a href=#198 id=198 data-nosnippet>198</a>//!   1111_1011:     1    1   1   1   1   0   1   1
+<a href=#199 id=199 data-nosnippet>199</a>//!                -128 +64 +32 +16  +8      +2  +1  = -5
+<a href=#200 id=200 data-nosnippet>200</a>//! ```
+<a href=#201 id=201 data-nosnippet>201</a>//!
+<a href=#202 id=202 data-nosnippet>202</a>//! That gives a quick shortcut. If the top bit is 0, both readings agree. If
+<a href=#203 id=203 data-nosnippet>203</a>//! the top bit is 1, it swings from +4 to −4 (a difference of 8, the number of
+<a href=#204 id=204 data-nosnippet>204</a>//! patterns), so signed = unsigned − 8. For 8-bit types, − 256:
+<a href=#205 id=205 data-nosnippet>205</a>//!
+<a href=#206 id=206 data-nosnippet>206</a>//! ```text
+<a href=#207 id=207 data-nosnippet>207</a>//!   1111_1111 (0xFF):   as u8 = 255   as i8 = 255 - 256 = -1
+<a href=#208 id=208 data-nosnippet>208</a>//!   1111_1011 (0xFB):   as u8 = 251   as i8 = 251 - 256 = -5
+<a href=#209 id=209 data-nosnippet>209</a>//!   1000_0000 (0x80):   as u8 = 128   as i8 = 128 - 256 = -128
+<a href=#210 id=210 data-nosnippet>210</a>//! ```
+<a href=#211 id=211 data-nosnippet>211</a>//!
+<a href=#212 id=212 data-nosnippet>212</a>//! (This scheme is called *two's complement*. Every modern CPU uses it.)
+<a href=#213 id=213 data-nosnippet>213</a>//!
+<a href=#214 id=214 data-nosnippet>214</a>//! **Think of a circle, not a line.** The patterns sit on a circle like the
+<a href=#215 id=215 data-nosnippet>215</a>//! numbers on a clock. Adding 1 moves one step clockwise; after the last
+<a href=#216 id=216 data-nosnippet>216</a>//! pattern you are back at the first:
+<a href=#217 id=217 data-nosnippet>217</a>//!
+<a href=#218 id=218 data-nosnippet>218</a>//! ```text
+<a href=#219 id=219 data-nosnippet>219</a>//!                     000
+<a href=#220 id=220 data-nosnippet>220</a>//!                    0 / 0
+<a href=#221 id=221 data-nosnippet>221</a>//!          111                  001
+<a href=#222 id=222 data-nosnippet>222</a>//!        7 / -1                1 / 1
+<a href=#223 id=223 data-nosnippet>223</a>//!
+<a href=#224 id=224 data-nosnippet>224</a>//!      110                          010
+<a href=#225 id=225 data-nosnippet>225</a>//!     6 / -2                       2 / 2
+<a href=#226 id=226 data-nosnippet>226</a>//!
+<a href=#227 id=227 data-nosnippet>227</a>//!          101                  011
+<a href=#228 id=228 data-nosnippet>228</a>//!        5 / -3                3 / 3
+<a href=#229 id=229 data-nosnippet>229</a>//!                     100
+<a href=#230 id=230 data-nosnippet>230</a>//!                   4 / -4
+<a href=#231 id=231 data-nosnippet>231</a>//!
+<a href=#232 id=232 data-nosnippet>232</a>//!    (each label is  unsigned / signed;  +1 = one step clockwise)
+<a href=#233 id=233 data-nosnippet>233</a>//! ```
+<a href=#234 id=234 data-nosnippet>234</a>//!
+<a href=#235 id=235 data-nosnippet>235</a>//! Unsigned and signed walk the **same circle**; they only print different
+<a href=#236 id=236 data-nosnippet>236</a>//! labels. That is why the CPU needs just one "add" instruction for both. It is
+<a href=#237 id=237 data-nosnippet>237</a>//! also why -1 is all ones (`111`, `0xFF`): it is one step back from zero.
+<a href=#238 id=238 data-nosnippet>238</a>//!
+<a href=#239 id=239 data-nosnippet>239</a>//! **The seam: overflow.** Somewhere on the circle the labels jump:
+<a href=#240 id=240 data-nosnippet>240</a>//!
+<a href=#241 id=241 data-nosnippet>241</a>//! * unsigned: between 7 and 0 (for `u8`, between 255 and 0)
+<a href=#242 id=242 data-nosnippet>242</a>//! * signed: between 3 and -4 (for `i8`, between 127 and -128)
+<a href=#243 id=243 data-nosnippet>243</a>//!
+<a href=#244 id=244 data-nosnippet>244</a>//! Crossing the seam is called **overflow**: `255_u8 + 1`, `0_u8 - 1`,
+<a href=#245 id=245 data-nosnippet>245</a>//! `127_i8 + 1`. The bits just keep going round the circle; the only question
+<a href=#246 id=246 data-nosnippet>246</a>//! is whether you *wanted* that.
+<a href=#247 id=247 data-nosnippet>247</a>//!
+<a href=#248 id=248 data-nosnippet>248</a>//! Rust's default: debug builds **panic** when you cross the seam, release builds
+<a href=#249 id=249 data-nosnippet>249</a>//! silently **wrap** (`127_i8 + 1` → -128). Don't depend on the build mode;
+<a href=#250 id=250 data-nosnippet>250</a>//! say what you want:
+<a href=#251 id=251 data-nosnippet>251</a>//!
+<a href=#252 id=252 data-nosnippet>252</a>//! | Method | `250_u8 + 10` gives | Use when |
+<a href=#253 id=253 data-nosnippet>253</a>//! |---|---|---|
+<a href=#254 id=254 data-nosnippet>254</a>//! | `wrapping_add` | `4` | going round the circle is intended (ring counters, hashes, tags) |
+<a href=#255 id=255 data-nosnippet>255</a>//! | `checked_add` | `None` | overflow is an error you want to handle |
+<a href=#256 id=256 data-nosnippet>256</a>//! | `saturating_add` | `255` | stop at the edge instead of going round |
+<a href=#257 id=257 data-nosnippet>257</a>//! | `overflowing_add` | `(4, true)` | you need the result *and* whether it wrapped |
+<a href=#258 id=258 data-nosnippet>258</a>//!
+<a href=#259 id=259 data-nosnippet>259</a>//! (In C and C++, crossing the seam with a *signed* type is undefined behaviour:
+<a href=#260 id=260 data-nosnippet>260</a>//! the compiler may assume it never happens. Rust has no such trap.)
+<a href=#261 id=261 data-nosnippet>261</a>//!
+<a href=#262 id=262 data-nosnippet>262</a>//! **Converting with `as`: same bits, new label.** `as` never checks anything.
+<a href=#263 id=263 data-nosnippet>263</a>//! It only relabels or resizes:
+<a href=#264 id=264 data-nosnippet>264</a>//!
+<a href=#265 id=265 data-nosnippet>265</a>//! * **Same size**: keep the bits, read them the other way.
+<a href=#266 id=266 data-nosnippet>266</a>//!   `-1_i8 as u8` = 255, `200_u8 as i8` = -56 (200 - 256).
+<a href=#267 id=267 data-nosnippet>267</a>//! * **To a bigger type**: add bits at the top. Unsigned adds 0s, so
+<a href=#268 id=268 data-nosnippet>268</a>//!   `255_u8 as i32` = 255. Signed adds copies of its top bit, so negatives stay
+<a href=#269 id=269 data-nosnippet>269</a>//!   negative: `-1_i8 as i32` = -1 (all 32 bits are 1: `0xFFFF_FFFF`).
+<a href=#270 id=270 data-nosnippet>270</a>//! * **To a smaller type**: chop off the top bits. `300_u32 as u8` = 44, because
+<a href=#271 id=271 data-nosnippet>271</a>//!   300 = `1_0010_1100` and the low 8 bits `0010_1100` are 44.
+<a href=#272 id=272 data-nosnippet>272</a>//!
+<a href=#273 id=273 data-nosnippet>273</a>//! Want a check instead? `u8::try_from(300)` returns an error rather than chopping.
+<a href=#274 id=274 data-nosnippet>274</a>//!
+<a href=#275 id=275 data-nosnippet>275</a>//! **Right shift keeps the sign for signed types.** `&gt;&gt;` slides every bit one
+<a href=#276 id=276 data-nosnippet>276</a>//! place right, which leaves an empty spot at the top. Unsigned fills it with 0.
+<a href=#277 id=277 data-nosnippet>277</a>//! Signed fills it with a copy of the top bit, so a negative number stays
+<a href=#278 id=278 data-nosnippet>278</a>//! negative (and it still halves the number):
+<a href=#279 id=279 data-nosnippet>279</a>//!
+<a href=#280 id=280 data-nosnippet>280</a>//! ```text
+<a href=#281 id=281 data-nosnippet>281</a>//!   u8:  1111_1000 (248)  &gt;&gt; 1  =  0111_1100 (124)
+<a href=#282 id=282 data-nosnippet>282</a>//!   i8:  1111_1000 (-8)   &gt;&gt; 1  =  1111_1100 (-4)
+<a href=#283 id=283 data-nosnippet>283</a>//! ```
+<a href=#284 id=284 data-nosnippet>284</a>//!
+<a href=#285 id=285 data-nosnippet>285</a>//! **Negating by hand** (rarely needed): flip every bit, then add 1.
+<a href=#286 id=286 data-nosnippet>286</a>//!
+<a href=#287 id=287 data-nosnippet>287</a>//! ```text
+<a href=#288 id=288 data-nosnippet>288</a>//!    5  = 0000_0101
+<a href=#289 id=289 data-nosnippet>289</a>//!   flip  1111_1010
+<a href=#290 id=290 data-nosnippet>290</a>//!   +1    1111_1011  = -5
+<a href=#291 id=291 data-nosnippet>291</a>//! ```
+<a href=#292 id=292 data-nosnippet>292</a>//!
+<a href=#293 id=293 data-nosnippet>293</a>//! **Two signed surprises.**
+<a href=#294 id=294 data-nosnippet>294</a>//!
+<a href=#295 id=295 data-nosnippet>295</a>//! * There is one more negative number than positive: `i8` goes down to -128 but
+<a href=#296 id=296 data-nosnippet>296</a>//!   only up to +127 (in the 3-bit world: down to -4, up to +3). So -128 has no
+<a href=#297 id=297 data-nosnippet>297</a>//!   positive partner, and `(-128_i8).abs()` and `-128_i8 / -1` overflow.
+<a href=#298 id=298 data-nosnippet>298</a>//! * Division rounds toward zero, and `%` keeps the sign of the left number:
+<a href=#299 id=299 data-nosnippet>299</a>//!   `-7 / 2 = -3` and `-7 % 2 = -1`. For a remainder that is never negative
+<a href=#300 id=300 data-nosnippet>300</a>//!   (e.g. to use as an array index), use `rem_euclid`: `(-7_i32).rem_euclid(2) = 1`.
+<a href=#301 id=301 data-nosnippet>301</a>//!
+<a href=#302 id=302 data-nosnippet>302</a>//! **Why this crate uses unsigned types** (`usize`, `u32`, `u64`): indexes,
+<a href=#303 id=303 data-nosnippet>303</a>//! counters and bit patterns are never negative. With unsigned types, `&amp;` masks,
+<a href=#304 id=304 data-nosnippet>304</a>//! `&gt;&gt;` shifts and wrap-around all behave exactly like the pictures above, with
+<a href=#305 id=305 data-nosnippet>305</a>//! no sign bit to worry about.
+<a href=#306 id=306 data-nosnippet>306</a>
+<a href=#307 id=307 data-nosnippet>307</a></span><span class="comment">// Each `pub mod x;` pulls in src/x.rs as a public module of the library.
+<a href=#308 id=308 data-nosnippet>308</a></span><span class="kw">pub mod </span>aba;
+<a href=#309 id=309 data-nosnippet>309</a><span class="kw">pub mod </span>padded;
+<a href=#310 id=310 data-nosnippet>310</a><span class="kw">pub mod </span>spsc;
+<a href=#311 id=311 data-nosnippet>311</a>
+<a href=#312 id=312 data-nosnippet>312</a><span class="doccomment">/// Checks the real-Rust-type numbers quoted in the "Unsigned vs signed integers" refresher.
+<a href=#313 id=313 data-nosnippet>313</a></span><span class="attr">#[cfg(test)]
+<a href=#314 id=314 data-nosnippet>314</a></span><span class="kw">mod </span>refresher_tests {
+<a href=#315 id=315 data-nosnippet>315</a>    <span class="attr">#[test]
+<a href=#316 id=316 data-nosnippet>316</a>    </span><span class="kw">fn </span>signed_unsigned_examples() {
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="macro">assert_eq!</span>((<span class="number">0xFF_u8 </span><span class="kw">as </span>i8, <span class="number">0x80_u8 </span><span class="kw">as </span>i8), (-<span class="number">1</span>, -<span class="number">128</span>));
+<a href=#318 id=318 data-nosnippet>318</a>        <span class="macro">assert_eq!</span>(<span class="number">0b1000_0001_u8 </span><span class="kw">as </span>i8, -<span class="number">127</span>);
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="macro">assert_eq!</span>(-<span class="number">5_i8 </span><span class="kw">as </span>u8, <span class="number">0xFB</span>);
+<a href=#320 id=320 data-nosnippet>320</a>        <span class="macro">assert_eq!</span>(<span class="number">0xFB_u8</span>.wrapping_add(<span class="number">0x07</span>), <span class="number">0x02</span>);
+<a href=#321 id=321 data-nosnippet>321</a>        <span class="macro">assert_eq!</span>((-<span class="number">1_i8 </span><span class="kw">as </span>u8, <span class="number">200_u8 </span><span class="kw">as </span>i8), (<span class="number">255</span>, -<span class="number">56</span>));
+<a href=#322 id=322 data-nosnippet>322</a>        <span class="macro">assert_eq!</span>((<span class="number">255_u8 </span><span class="kw">as </span>i32, -<span class="number">1_i8 </span><span class="kw">as </span>i32), (<span class="number">255</span>, -<span class="number">1</span>));
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="macro">assert_eq!</span>(-<span class="number">1_i8 </span><span class="kw">as </span>i32 <span class="kw">as </span>u32, <span class="number">0xFFFF_FFFF</span>);
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="macro">assert_eq!</span>(<span class="number">300_u32 </span><span class="kw">as </span>u8, <span class="number">44</span>);
+<a href=#325 id=325 data-nosnippet>325</a>        <span class="macro">assert_eq!</span>(<span class="number">300_u32</span>, <span class="number">0b1_0010_1100</span>);
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="macro">assert!</span>(u8::try_from(<span class="number">300_u32</span>).is_err());
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="macro">assert_eq!</span>(<span class="number">0x80_u8</span>, <span class="number">128</span>);
+<a href=#328 id=328 data-nosnippet>328</a>        <span class="macro">assert_eq!</span>(!<span class="number">5_i8 </span>+ <span class="number">1</span>, -<span class="number">5</span>);
+<a href=#329 id=329 data-nosnippet>329</a>        <span class="macro">assert_eq!</span>((<span class="number">0xF8_u8 </span>&gt;&gt; <span class="number">1</span>, -<span class="number">8_i8 </span>&gt;&gt; <span class="number">1</span>), (<span class="number">0x7C</span>, -<span class="number">4</span>));
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="macro">assert_eq!</span>(<span class="number">127_i8</span>.wrapping_add(<span class="number">1</span>), -<span class="number">128</span>);
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="macro">assert_eq!</span>(<span class="number">250_u8</span>.wrapping_add(<span class="number">10</span>), <span class="number">4</span>);
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="macro">assert_eq!</span>(<span class="number">250_u8</span>.checked_add(<span class="number">10</span>), <span class="prelude-val">None</span>);
+<a href=#333 id=333 data-nosnippet>333</a>        <span class="macro">assert_eq!</span>(<span class="number">250_u8</span>.saturating_add(<span class="number">10</span>), <span class="number">255</span>);
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="macro">assert_eq!</span>(<span class="number">250_u8</span>.overflowing_add(<span class="number">10</span>), (<span class="number">4</span>, <span class="bool-val">true</span>));
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="macro">assert_eq!</span>((-<span class="number">128_i8</span>).checked_abs(), <span class="prelude-val">None</span>);
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="macro">assert_eq!</span>((-<span class="number">128_i8</span>).checked_div(-<span class="number">1</span>), <span class="prelude-val">None</span>);
+<a href=#337 id=337 data-nosnippet>337</a>        <span class="macro">assert_eq!</span>((-<span class="number">7 </span>/ <span class="number">2</span>, -<span class="number">7 </span>% <span class="number">2</span>, (-<span class="number">7_i32</span>).rem_euclid(<span class="number">2</span>)), (-<span class="number">3</span>, -<span class="number">1</span>, <span class="number">1</span>));
+<a href=#338 id=338 data-nosnippet>338</a>    }
+<a href=#339 id=339 data-nosnippet>339</a>}
+</code></pre></div></section></main></body></html>

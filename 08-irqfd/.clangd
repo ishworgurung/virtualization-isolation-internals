@@ -1,0 +1,12 @@
+# Tell clangd (the editor's C language server) the flags the Makefile uses,
+# so the editor shows the same warnings as the build. guest.c is bare-metal
+# 32-bit code; irqfd_demo.c uses C23 #embed.
+If:
+  PathMatch: guest\.c
+CompileFlags:
+  Add: [-m32, -ffreestanding, -mgeneral-regs-only, -std=gnu11]
+---
+If:
+  PathMatch: irqfd_demo\.c
+CompileFlags:
+  Add: [-std=gnu23]

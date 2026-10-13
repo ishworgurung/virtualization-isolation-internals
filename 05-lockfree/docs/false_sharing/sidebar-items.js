@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ITERS"],"fn":["hammer","main","time"],"struct":["Adjacent","Padded"]};

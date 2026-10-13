@@ -1,0 +1,21 @@
+# Rust build output (pre-built docs live in */docs/)
+target/
+
+# Python bytecode
+__pycache__/
+
+# Compiled demos (rebuilt by `make`)
+01-virtio/virtio_demo
+02-hypercalls/kvm_exits
+03-uffd/uffd_demo
+04-io_uring/uring_basic
+04-io_uring/uring_bench
+04-io_uring/uring_cqpoll
+04-io_uring/uring_seccomp
+07-ioeventfd/ioeventfd_demo
+08-irqfd/irqfd_demo
+08-irqfd/irqfd_demo_pure_asm_guest
+11-scm-rights/fd_pass
+09-kick-roundtrip/kick_roundtrip
+*.elf
+*.bin

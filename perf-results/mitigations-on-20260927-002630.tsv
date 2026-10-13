@@ -1,0 +1,40 @@
+# label: mitigations-on
+# date: 2026-09-27T00:26:30+05:45
+# kernel: 7.2.3-2-MANJARO
+# cmdline: BOOT_IMAGE=/vmlinuz-7.2-x86_64 root=UUID=<uuid> rw cryptdevice=UUID=<uuid>:luks-<uuid> root=/dev/mapper/luks-<uuid> udev.log_priority=3 nvidia-drm.modeset=1 isolcpus=domain,managed_irq,4-7 nohz_full=4-7 rcu_nocbs=4-7 irqaffinity=0-3,8-23 intel_idle.max_cstate=2
+# cpu: 12th Gen Intel(R) Core(TM) i9-12900K
+# microcode: 0x3e
+# governor: 16 performance
+# epp: 16 performance
+# turbo: on
+# smt: off
+# power_limit_w: 170
+# pinning: single=4 pair=0,2
+# reps: 5 stress_s: 5
+# vulnerabilities: gather_data_sampling=Not affected; ghostwrite=Not affected; indirect_target_selection=Not affected; itlb_multihit=Not affected; l1tf=Not affected; mds=Not affected; meltdown=Not affected; mmio_stale_data=Not affected; old_microcode=Not affected; reg_file_data_sampling=Mitigation: Clear Register File; retbleed=Not affected; spec_rstack_overflow=Not affected; spec_store_bypass=Mitigation: Speculative Store Bypass disabled via prctl; spectre_v1=Mitigation: usercopy/swapgs barriers and __user pointer sanitization; spectre_v2=Mitigation: Enhanced / Automatic IBRS; IBPB: conditional; PBRSB-eIBRS: SW sequence; BHI: BHI_DIS_S; srbds=Not affected; tsa=Not affected; tsx_async_abort=Not affected; vmscape=Mitigation: IBPB before exit to userspace; 
+syscall_getppid	kernel	ns	lower	86.95,86.92,87.93,86.92,86.73
+null_write_ops	kernel	ops/s	higher	979267.89,979492.20,979105.73,979313.04,979177.93
+context_switch_pipe	kernel	us	lower	1.129330,1.121950,1.142820,1.126645,1.139655
+switch_ops	kernel	ops/s	higher	654036.56,651396.08,649773.33,648315.75,649272.54
+page_fault_ops	kernel	ops/s	higher	53233.69,49035.93,54179.60,52849.74,53271.33
+fork_ops	kernel	ops/s	higher	8500.03,8512.16,8436.19,8481.81,8388.78
+exec_ops	kernel	ops/s	higher	583.30,588.58,589.92,597.55,592.45
+pipe_ops	kernel	ops/s	higher	2076996.12,2061196.48,2066417.64,2060448.21,2061886.38
+futex_ops	kernel	ops/s	higher	309874.18,307945.74,308680.20,310188.02,309355.21
+signal_queue_ops	kernel	ops/s	higher	776595.33,780060.46,778201.16,781188.94,776279.68
+mmap_ops	kernel	ops/s	higher	75.57,75.76,73.60,73.95,72.58
+read_loop_ops	kernel	ops/s	higher	11397930,11434491,11342425,11364232,11379903
+io_uring_batch_ops	kernel	ops/s	higher	17157269,17252206,17257060,17129277,17258280
+io_uring_sqpoll_ops	kernel	ops/s	higher	17407425,17330485,17404723,17402535,17353437
+kvm_exit_heavy_io	kvm	ns	lower	1249,1252,1252,1251,1250
+kvm_exit_light_cpuid	kvm	ns	lower	537,537,537,538,538
+kvm_exit_light_vmcall	kvm	ns	lower	535,536,535,535,535
+kick_pipelined_classic	kvm	us	lower	12.73,12.74,12.74,12.74,12.74
+kick_pipelined_fast	kvm	us	lower	11.25,11.24,11.22,11.28,11.27
+kick_pingpong_classic	kvm	us	lower	2.71,2.7,2.73,2.72,2.72
+kick_pingpong_fast	kvm	us	lower	3.78,3.71,3.81,3.8,3.8
+shell_forkexec_2000	real	ms	lower	448.339,448.464,444.865,449.333,448.295
+tar_usr_share_man	real	ms	lower	100.817,100.897,101.068,100.720,100.536
+gcc_compile_x10	real	ms	lower	490.310,491.057,490.716,492.082,490.833
+cpu_matrixprod_ops	control	ops/s	higher	3642.06,3642.49,3627.21,3640.75,3628.21
+memcpy_256MB	control	GB/s	higher	14.016596,14.044470,14.079272,14.088793,14.094989

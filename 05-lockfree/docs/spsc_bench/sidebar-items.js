@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CAP","EXPECT","N"],"fn":["bench_mpsc","bench_mutex","bench_spsc","main","report"]};

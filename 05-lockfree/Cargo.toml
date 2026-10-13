@@ -1,0 +1,15 @@
+[package]
+name = "lockfree"
+version = "0.1.0"
+edition = "2021"
+description = "Lock-free building blocks explained by running code: SPSC ring, ABA, false sharing, memory ordering"
+
+# No dependencies on purpose: everything is std, so every line is readable.
+# Layout: src/lib.rs is the library (the data structures); every file in
+# src/bin/ is automatically built as a separate executable by Cargo
+# (`cargo run --release --bin <name>`).
+
+# Benchmarks only mean something with optimisations on, so always use --release.
+[profile.release]
+opt-level = 3   # maximum optimisation
+debug = false   # no debug info (smaller, faster build)

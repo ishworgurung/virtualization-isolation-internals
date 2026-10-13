@@ -1,0 +1,69 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Cache-line padding."><title>lockfree::padded - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="lockfree" data-themes="" data-resource-suffix="" data-rustdoc-version="1.101.0-nightly (32dba69d6 2026-10-09)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module padded</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../lockfree/index.html">lockfree</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module padded</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#background-caches-and-cache-lines" title="Background: caches and cache lines">Background: caches and cache lines</a></li><li><a href="#cache-coherence" title="Cache coherence">Cache coherence</a></li><li><a href="#false-sharing" title="False sharing">False sharing</a></li><li><a href="#why-not-just-use-atomicu64-everywhere-instead-of-u64" title="“Why not just use `AtomicU64` everywhere instead of `u64`?”">“Why not just use <code>AtomicU64</code> everywhere instead of <code>u64</code>?”</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate lockfree</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">lockfree</a></div><h1>Module <span>padded</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/lockfree/padded.rs.html#1-140">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Cache-line padding.</p>
+<h3 id="background-caches-and-cache-lines"><a class="doc-anchor" href="#background-caches-and-cache-lines">§</a>Background: caches and cache lines</h3>
+<p>RAM is slow (~100 ns per access); each CPU core therefore keeps small, fast
+private copies of recently used memory in its caches (L1 ~1 ns, L2 ~4 ns).
+Caches never hold single bytes or single variables. They hold fixed-size
+blocks called <strong>cache lines</strong>: 64 bytes on x86-64 and most ARM (Apple
+M-series and some POWER use 128). Reading one byte loads the whole 64-byte
+line that contains it.</p>
+<p>Which line does an address belong to? Divide by 64 and drop the remainder
+(equivalently <code>addr &gt;&gt; 6</code>, since 64 = 2^6):</p>
+<div class="example-wrap"><pre class="language-text"><code>  address 0x1000 .. 0x103F  -&gt; line 0x40   (4096 / 64 = 64 = 0x40)
+  address 0x1040 .. 0x107F  -&gt; line 0x41
+  an AtomicU64 at 0x1008 and one at 0x1010 -&gt; both in line 0x40</code></pre></div><h3 id="cache-coherence"><a class="doc-anchor" href="#cache-coherence">§</a>Cache coherence</h3>
+<p>With several cores each holding copies, someone must keep them consistent.
+The hardware does it with a <strong>coherence protocol</strong> (the MESI family: each
+line in each cache is Modified, Exclusive, Shared or Invalid). The rule that
+matters here: <strong>a core may write a line only while it holds the only copy.</strong>
+Before writing, it must invalidate every other core’s copy; if another core
+then wants the line, it must fetch it back (tens of nanoseconds).</p>
+<h3 id="false-sharing"><a class="doc-anchor" href="#false-sharing">§</a>False sharing</h3>
+<p>If thread A writes variable <code>x</code> and thread B writes variable <code>y</code>, and <code>x</code> and
+<code>y</code> sit on the SAME line, every write by A invalidates B’s copy and vice
+versa. The line bounces (“ping-pongs”) between the two cores’ caches on
+every write — even though the threads never touch each other’s data. The
+program is logically parallel and physically serialised. “False” because
+nothing is really shared; the hardware just can’t tell <code>x</code> from <code>y</code> within
+one line.</p>
+<div class="example-wrap"><pre class="language-text"><code>  one line:  [ x x x x x x x x | y y y y y y y y | (48 unused bytes) ]
+                ^ core 0 writes    ^ core 1 writes  -&gt; line ping-pongs
+
+  padded:    line N:   [ x x x x x x x x | (56 bytes padding) ]  &lt;- core 0 keeps it
+             line N+1: [ y y y y y y y y | (56 bytes padding) ]  &lt;- core 1 keeps it</code></pre></div>
+<p>Fix: force hot, independently-written variables onto different lines.
+<code>#[repr(align(64))]</code> makes the type start on a 64-byte boundary (its address
+is a multiple of 64) <em>and</em> pads its size to a multiple of 64, so neighbours
+can never share its line. (Rust always rounds a type’s size up to a multiple
+of its alignment, so that every element of an array stays aligned.)</p>
+<p><code>bin/false_sharing.rs</code> measures the difference (several times slower).</p>
+<h3 id="why-not-just-use-atomicu64-everywhere-instead-of-u64"><a class="doc-anchor" href="#why-not-just-use-atomicu64-everywhere-instead-of-u64">§</a>“Why not just use <code>AtomicU64</code> everywhere instead of <code>u64</code>?”</h3>
+<p>Because <strong>atomics do nothing about cache lines; padding does.</strong>
+<code>AtomicU64</code> has the same size and alignment as <code>u64</code>: 8 bytes, no padding.
+Eight of them fit in one 64-byte line, exactly like eight <code>u64</code>s. “Atomic”
+changes the <em>instructions</em> used to access the value, not its memory layout.
+Proof: the slow case in <code>bin/false_sharing.rs</code> is two <code>AtomicU64</code>s side by
+side. It is <code>CachePadded</code> (<code>#[repr(align(64))]</code>) that pushes each value
+onto its own line, which is why <code>CachePadded&lt;AtomicU64&gt;</code> is 64 bytes to hold 8.
+(The <code>sizes</code> test below checks these numbers.)</p>
+<p>Making everything atomic would actually be <em>slower</em>:</p>
+<ul>
+<li><strong>Pricier writes.</strong> <code>fetch_add</code> compiles to <code>lock add</code> on x86, roughly
+20 cycles instead of about 1 for a plain <code>add</code>, even with <code>Relaxed</code>.</li>
+<li><strong>Optimisations stop.</strong> A plain <code>u64</code> in a loop can live in a register;
+the compiler can merge repeated writes or use SIMD. Every atomic access
+must really touch memory. (<code>false_sharing.rs</code> relies on this: its ITERS
+atomic increments cannot be collapsed into one.)</li>
+<li><strong>More cache traffic.</strong> Each of those memory accesses touches the cache
+line, which is the very thing you were trying to avoid.</li>
+</ul>
+<p>Choosing:</p>
+<div class="table"><table><thead><tr><th>Data</th><th>Use</th></tr></thead><tbody>
+<tr><td>Touched by only one thread (the vast majority)</td><td>plain <code>u64</code>. No other core writes the line, so false sharing can’t happen</td></tr>
+<tr><td>Read and written by several threads</td><td>an atomic or a <code>Mutex</code>. Rust forces this: you can’t mutate a plain <code>u64</code> through a shared <code>&amp;</code> from several threads</td></tr>
+<tr><td>Hot data that <em>different</em> threads write at the same time (per-thread counters, <code>head</code>/<code>tail</code> in <code>spsc.rs</code>)</td><td>atomic <strong>and</strong> <code>CachePadded</code></td></tr>
+</tbody></table>
+</div>
+<p>False sharing needs two cores writing the same line <em>at the same time</em>. The
+fix is to lay out that small set of hot, shared values carefully (padding,
+or giving each thread its own data), not to change the type of everything.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.CachePadded.html" title="struct lockfree::padded::CachePadded">Cache<wbr>Padded</a></dt><dd>Wraps <code>T</code> so it occupies its own cache line(s).</dd></dl></section></div></main></body></html>

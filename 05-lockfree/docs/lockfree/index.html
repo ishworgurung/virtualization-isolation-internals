@@ -1,0 +1,250 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="lockfree"><title>lockfree - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="lockfree" data-themes="" data-resource-suffix="" data-rustdoc-version="1.101.0-nightly (32dba69d6 2026-10-09)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-41dd4d93.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate lockfree</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../lockfree/index.html">lockfree</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#lockfree" title="lockfree">lockfree</a><ul><li><a href="#suggested-reading-order" title="Suggested reading order">Suggested reading order</a></li><li><a href="#vocabulary-used-throughout" title="Vocabulary used throughout">Vocabulary used throughout</a></li><li><a href="#atomicity-in-other-contexts" title="Atomicity in other contexts">Atomicity in other contexts</a></li><li><a href="#refresher-bits-hex-shifts-and-masks" title="Refresher: bits, hex, shifts and masks">Refresher: bits, hex, shifts and masks</a></li></ul></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>lockfree</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/lockfree/lib.rs.html#1-339">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><h2 id="lockfree"><a class="doc-anchor" href="#lockfree">§</a>lockfree</h2>
+<p>Small, heavily-commented lock-free building blocks:</p>
+<ul>
+<li><a href="spsc/index.html" title="mod lockfree::spsc"><code>spsc</code></a>   — bounded single-producer/single-consumer ring (acquire/release,
+cached indices, cache-line padding). Same shape as a virtqueue
+or an io_uring ring.</li>
+<li><a href="aba/index.html" title="mod lockfree::aba"><code>aba</code></a>    — a Treiber stack that makes the ABA problem reproducible on demand,
+and the tagged-pointer fix.</li>
+<li><a href="padded/index.html" title="mod lockfree::padded"><code>padded</code></a> — <code>CachePadded&lt;T&gt;</code>, the cure for false sharing.</li>
+</ul>
+<p>The binaries in <code>src/bin/</code> exercise each one:
+<code>spsc_bench</code>, <code>aba_demo</code>, <code>false_sharing</code>, <code>litmus</code>.</p>
+<h3 id="suggested-reading-order"><a class="doc-anchor" href="#suggested-reading-order">§</a>Suggested reading order</h3>
+<ol>
+<li>This file: vocabulary + the bits refresher below.</li>
+<li><code>padded.rs</code> (short) — what a cache line is.</li>
+<li><code>spsc.rs</code> — the ring buffer. The most important file.</li>
+<li><code>bin/litmus.rs</code> — why the orderings in <code>spsc.rs</code> matter.</li>
+<li><code>aba.rs</code> + <code>bin/aba_demo.rs</code> — what goes wrong once you need CAS.</li>
+<li><code>bin/false_sharing.rs</code>, <code>bin/spsc_bench.rs</code> — measure it.</li>
+</ol>
+<h3 id="vocabulary-used-throughout"><a class="doc-anchor" href="#vocabulary-used-throughout">§</a>Vocabulary used throughout</h3>
+<ul>
+<li><strong>Thread</strong>: an independent flow of execution. Two threads may run at the
+<em>same instant</em> on two CPU cores, or take turns on one core. Either way, you
+cannot predict where one thread is when another looks at shared memory.</li>
+<li><strong>Lock / mutex</strong>: the classic way to share data: “only one thread may be in
+here at a time”. Simple and correct, but a thread that is paused while
+holding the lock (descheduled, page-faulting) stalls everyone waiting on it.</li>
+<li><strong>Lock-free</strong>: threads coordinate through atomic instructions instead of
+mutexes, and the system as a whole always makes progress — a thread that
+is paused can never block the others.</li>
+<li><strong>Wait-free</strong> (stronger): <em>every</em> operation finishes in a bounded number of
+its own steps, no matter what other threads do. The SPSC ring is wait-free;
+the Treiber stack is only lock-free (a CAS may have to retry).</li>
+<li><strong>Atomic</strong>: a memory access the CPU performs indivisibly (no torn reads or
+writes — you never see half of an old value and half of a new one) and that
+the compiler may not split, merge or elide. In Rust: <code>AtomicUsize</code>,
+<code>AtomicU32</code>, <code>AtomicU64</code>, … with methods <code>load</code>, <code>store</code>, <code>fetch_add</code>,
+<code>compare_exchange</code>. (The word means other things in databases and
+distributed systems; see <a href="#atomicity-in-other-contexts">Atomicity in other
+contexts</a>.)</li>
+<li><strong>Memory ordering</strong> (<code>Relaxed</code>, <code>Acquire</code>, <code>Release</code>, <code>AcqRel</code>, <code>SeqCst</code>):
+rules about which <em>other</em> memory accesses become visible to another thread
+together with an atomic one. See <code>spsc.rs</code> and the <code>litmus</code> binary.
+<ul>
+<li><code>Relaxed</code>: “just make this one access atomic; no promises about others”.</li>
+<li><code>Release</code> (on a store): “everything I wrote before this is published too”.</li>
+<li><code>Acquire</code> (on a load): “if I see a Released value, I also see everything
+written before it”.</li>
+<li><code>AcqRel</code>: both, for read-modify-write operations such as CAS.</li>
+<li><code>SeqCst</code>: Acquire/Release plus one global order all threads agree on.</li>
+</ul>
+</li>
+<li><strong>CAS</strong> (compare-and-swap, <code>compare_exchange</code> in Rust): “if X still equals
+OLD, set it to NEW; tell me whether it worked” — the basic lock-free
+read-modify-write building block. It is ONE hardware instruction
+(<code>lock cmpxchg</code> on x86), so no other thread can sneak in between the
+compare and the swap.</li>
+<li><strong>Happens-before</strong>: if A happens-before B, then B sees A’s effects.
+Within one thread, program order gives you this for free. Across threads,
+you only get it through a synchronising pair such as Release → Acquire.</li>
+</ul>
+<h3 id="atomicity-in-other-contexts"><a class="doc-anchor" href="#atomicity-in-other-contexts">§</a>Atomicity in other contexts</h3>
+<p>“Atomic” is an overloaded word. The common core is always <strong>no observer
+ever sees a half-done state</strong>; what changes is <em>who</em> the observer is and
+<em>what</em> could interrupt the operation halfway.</p>
+<div class="table"><table><thead><tr><th>Context</th><th>“Atomic” means</th><th>Protects against</th><th>Scope</th></tr></thead><tbody>
+<tr><td><strong>CPU / Rust atomics</strong> (this crate)</td><td>a single memory access is indivisible; no torn values</td><td>other threads running at the same time</td><td>one memory location, a few bytes</td></tr>
+<tr><td><strong>Databases</strong> (the A in ACID)</td><td>a transaction’s writes happen all-or-nothing</td><td>a <strong>crash</strong> mid-transaction</td><td>many rows, one database</td></tr>
+<tr><td><strong>Distributed atomic commit</strong> (two-phase commit, 2PC)</td><td>every node commits, or every node aborts</td><td>node crashes, lost messages</td><td>many machines</td></tr>
+<tr><td><strong>Atomic broadcast</strong> (a.k.a. total-order broadcast)</td><td>every node delivers the same messages in the same order</td><td>nodes seeing events in different orders</td><td>many machines; equivalent to consensus (Raft, Paxos)</td></tr>
+<tr><td><strong>Filesystems</strong> (“atomic rename”)</td><td>readers see the old file or the new one, never a partial one</td><td>crash during a write, concurrent readers</td><td>one path</td></tr>
+</tbody></table>
+</div>
+<p><strong>Trap: atomic is not isolated.</strong> ACID atomicity is about <em>crashes</em>, not
+concurrency; concurrency is the <strong>I</strong> (isolation). An “atomic” transaction
+can still suffer race anomalies, just as a Rust atomic does not order your
+<em>other</em> memory accesses (that is what <code>Acquire</code>/<code>Release</code> add). In both
+worlds atomicity is the weaker guarantee, and ordering/isolation is a
+separate one you must ask for.</p>
+<p><strong>Where the worlds meet: linearizability.</strong> Distributed-systems theory has
+the <em>atomic register</em> (Lamport): a shared variable whose every read and
+write appears to take effect at a single instant somewhere between its call
+and its return. That property is <strong>linearizability</strong>, which Jepsen calls
+<em>atomic consistency</em>. Operations on a single CPU atomic are linearizable,
+so an <code>AtomicU64</code> is effectively the one-machine, nanosecond-scale version
+of what etcd or ZooKeeper provide across a cluster in milliseconds. The
+ring in <a href="spsc/index.html" title="mod lockfree::spsc"><code>spsc</code></a> and a Raft log are the same idea at very different scales.</p>
+<p>In one line: on a CPU, “atomic” = indivisible for other threads; in a
+database, all-or-nothing across a crash; across a cluster, all nodes agree,
+which needs consensus.</p>
+<h3 id="refresher-bits-hex-shifts-and-masks"><a class="doc-anchor" href="#refresher-bits-hex-shifts-and-masks">§</a>Refresher: bits, hex, shifts and masks</h3>
+<p>Lock-free code uses a handful of bit tricks. Here they are with numbers.</p>
+<p><strong>Binary and hex.</strong> A <code>u8</code> has 8 bits; <code>0b0000_1101</code> is 13. Hex groups four
+bits per digit: <code>0xD</code> = <code>0b1101</code> = 13, <code>0xFF</code> = <code>0b1111_1111</code> = 255.
+<code>u32::MAX</code> is <code>0xFFFF_FFFF</code> (32 ones). Underscores are only for readability.</p>
+<p><strong>AND <code>&amp;</code></strong> keeps a bit only if it is 1 in <em>both</em> inputs. Used to <em>extract</em>
+or <em>test</em> bits:</p>
+<div class="example-wrap"><pre class="language-text"><code>    13 = 0b1101
+  &amp;  7 = 0b0111
+  -------------
+     5 = 0b0101      (the top bit was &quot;masked off&quot;)</code></pre></div>
+<p><strong>OR <code>|</code></strong> sets a bit if it is 1 in <em>either</em> input. Used to <em>combine</em> fields
+that occupy different bits:</p>
+<div class="example-wrap"><pre class="language-text"><code>    0b1100_0000
+  | 0b0000_0011
+  -------------
+    0b1100_0011      (neither side overwrote the other)</code></pre></div>
+<p><strong>Left shift <code>&lt;&lt;</code></strong> moves bits towards the high end, filling with zeros.
+<code>x &lt;&lt; n</code> equals <code>x * 2^n</code> (as long as nothing falls off the top):
+<code>1 &lt;&lt; 3 = 0b1000 = 8</code>, <code>5 &lt;&lt; 32 = 0x0000_0005_0000_0000</code>.</p>
+<p><strong>Right shift <code>&gt;&gt;</code></strong> moves bits towards the low end; the low bits fall off.
+<code>x &gt;&gt; n</code> equals <code>x / 2^n</code> rounded down: <code>13 &gt;&gt; 2 = 3</code>, and
+<code>0x0000_0005_0000_0002 &gt;&gt; 32 = 5</code>.</p>
+<p><strong>Casting to a narrower type truncates</strong>: <code>0x0000_0005_0000_0002_u64 as u32</code>
+keeps only the low 32 bits → <code>2</code>. Casting to a wider type zero-extends.</p>
+<p><strong>Powers of two and masks.</strong> If <code>cap</code> is a power of two (2, 4, 8, 16…),
+then <code>mask = cap - 1</code> is all ones below it (<code>8 - 1 = 7 = 0b0111</code>), and
+<code>i &amp; mask == i % cap</code> for every <code>i</code>. <code>%</code> (division) costs tens of cycles;
+<code>&amp;</code> costs one. That is why ring buffers insist on power-of-two sizes. It only
+works for powers of two: <code>cap = 6</code> gives <code>mask = 5 = 0b101</code>, and <code>2 &amp; 5 = 0</code>,
+not <code>2</code>.</p>
+<p><strong>Wrapping arithmetic.</strong> Integers have a fixed number of bits, so they wrap:
+for <code>u8</code>, <code>255 + 1</code> → <code>0</code> and <code>0 - 1</code> → <code>255</code> (arithmetic mod 256). In
+debug builds Rust panics on overflow, so code that <em>wants</em> wrapping says so:
+<code>wrapping_add</code>, <code>wrapping_sub</code>. The useful property: <code>b.wrapping_sub(a)</code>
+is still the true distance from <code>a</code> to <code>b</code> even if <code>b</code> has wrapped past zero
+(see <code>spsc.rs</code> for a worked example).</p>
+<h4 id="unsigned-vs-signed-integers"><a class="doc-anchor" href="#unsigned-vs-signed-integers">§</a>Unsigned vs signed integers</h4>
+<p><strong>The one idea.</strong> A number type is a fixed number of bits, so it has a fixed
+number of <em>bit patterns</em>. 8 bits give 256 patterns, from <code>0000_0000</code> to
+<code>1111_1111</code>. The type only decides <strong>which number each pattern means</strong>:</p>
+<ul>
+<li>unsigned (<code>u8</code>): the patterns mean 0, 1, 2, …, 255</li>
+<li>signed (<code>i8</code>): the patterns mean -128, …, -1, 0, 1, …, 127</li>
+</ul>
+<p>The bits in memory are identical. Only the <em>reading</em> differs.</p>
+<p><strong>A tiny 3-bit world.</strong> 256 rows is too many to draw, so pretend numbers had
+only 3 bits (8 patterns). Everything below works the same way for 8, 32 or
+64 bits.</p>
+<div class="example-wrap"><pre class="language-text"><code>  bits   unsigned   signed
+  000       0          0
+  001       1          1
+  010       2          2
+  011       3          3
+  100       4         -4     &lt;- top bit is 1: signed reads it as negative
+  101       5         -3
+  110       6         -2
+  111       7         -1</code></pre></div>
+<p><strong>Where the negative numbers come from: place values.</strong> In ordinary binary
+each bit is worth a power of two. Signed changes just one thing: <strong>the top
+bit is worth minus</strong> its usual value.</p>
+<div class="example-wrap"><pre class="language-text"><code>                top
+  bit worth:    4s   2s   1s
+  unsigned:    +4   +2   +1
+  signed:      -4   +2   +1      &lt;- only the top bit&#39;s sign changes
+
+  101  unsigned:  4 + 0 + 1 =  5
+       signed:   -4 + 0 + 1 = -3
+
+  111  unsigned:  4 + 2 + 1 =  7
+       signed:   -4 + 2 + 1 = -1</code></pre></div>
+<p>Same for 8 bits, where the top bit is worth −128 instead of +128:</p>
+<div class="example-wrap"><pre class="language-text"><code>  bit worth:   -128  64  32  16   8   4   2   1
+  1111_1011:     1    1   1   1   1   0   1   1
+               -128 +64 +32 +16  +8      +2  +1  = -5</code></pre></div>
+<p>That gives a quick shortcut. If the top bit is 0, both readings agree. If
+the top bit is 1, it swings from +4 to −4 (a difference of 8, the number of
+patterns), so signed = unsigned − 8. For 8-bit types, − 256:</p>
+<div class="example-wrap"><pre class="language-text"><code>  1111_1111 (0xFF):   as u8 = 255   as i8 = 255 - 256 = -1
+  1111_1011 (0xFB):   as u8 = 251   as i8 = 251 - 256 = -5
+  1000_0000 (0x80):   as u8 = 128   as i8 = 128 - 256 = -128</code></pre></div>
+<p>(This scheme is called <em>two’s complement</em>. Every modern CPU uses it.)</p>
+<p><strong>Think of a circle, not a line.</strong> The patterns sit on a circle like the
+numbers on a clock. Adding 1 moves one step clockwise; after the last
+pattern you are back at the first:</p>
+<div class="example-wrap"><pre class="language-text"><code>                    000
+                   0 / 0
+         111                  001
+       7 / -1                1 / 1
+
+     110                          010
+    6 / -2                       2 / 2
+
+         101                  011
+       5 / -3                3 / 3
+                    100
+                  4 / -4
+
+   (each label is  unsigned / signed;  +1 = one step clockwise)</code></pre></div>
+<p>Unsigned and signed walk the <strong>same circle</strong>; they only print different
+labels. That is why the CPU needs just one “add” instruction for both. It is
+also why -1 is all ones (<code>111</code>, <code>0xFF</code>): it is one step back from zero.</p>
+<p><strong>The seam: overflow.</strong> Somewhere on the circle the labels jump:</p>
+<ul>
+<li>unsigned: between 7 and 0 (for <code>u8</code>, between 255 and 0)</li>
+<li>signed: between 3 and -4 (for <code>i8</code>, between 127 and -128)</li>
+</ul>
+<p>Crossing the seam is called <strong>overflow</strong>: <code>255_u8 + 1</code>, <code>0_u8 - 1</code>,
+<code>127_i8 + 1</code>. The bits just keep going round the circle; the only question
+is whether you <em>wanted</em> that.</p>
+<p>Rust’s default: debug builds <strong>panic</strong> when you cross the seam, release builds
+silently <strong>wrap</strong> (<code>127_i8 + 1</code> → -128). Don’t depend on the build mode;
+say what you want:</p>
+<div class="table"><table><thead><tr><th>Method</th><th><code>250_u8 + 10</code> gives</th><th>Use when</th></tr></thead><tbody>
+<tr><td><code>wrapping_add</code></td><td><code>4</code></td><td>going round the circle is intended (ring counters, hashes, tags)</td></tr>
+<tr><td><code>checked_add</code></td><td><code>None</code></td><td>overflow is an error you want to handle</td></tr>
+<tr><td><code>saturating_add</code></td><td><code>255</code></td><td>stop at the edge instead of going round</td></tr>
+<tr><td><code>overflowing_add</code></td><td><code>(4, true)</code></td><td>you need the result <em>and</em> whether it wrapped</td></tr>
+</tbody></table>
+</div>
+<p>(In C and C++, crossing the seam with a <em>signed</em> type is undefined behaviour:
+the compiler may assume it never happens. Rust has no such trap.)</p>
+<p><strong>Converting with <code>as</code>: same bits, new label.</strong> <code>as</code> never checks anything.
+It only relabels or resizes:</p>
+<ul>
+<li><strong>Same size</strong>: keep the bits, read them the other way.
+<code>-1_i8 as u8</code> = 255, <code>200_u8 as i8</code> = -56 (200 - 256).</li>
+<li><strong>To a bigger type</strong>: add bits at the top. Unsigned adds 0s, so
+<code>255_u8 as i32</code> = 255. Signed adds copies of its top bit, so negatives stay
+negative: <code>-1_i8 as i32</code> = -1 (all 32 bits are 1: <code>0xFFFF_FFFF</code>).</li>
+<li><strong>To a smaller type</strong>: chop off the top bits. <code>300_u32 as u8</code> = 44, because
+300 = <code>1_0010_1100</code> and the low 8 bits <code>0010_1100</code> are 44.</li>
+</ul>
+<p>Want a check instead? <code>u8::try_from(300)</code> returns an error rather than chopping.</p>
+<p><strong>Right shift keeps the sign for signed types.</strong> <code>&gt;&gt;</code> slides every bit one
+place right, which leaves an empty spot at the top. Unsigned fills it with 0.
+Signed fills it with a copy of the top bit, so a negative number stays
+negative (and it still halves the number):</p>
+<div class="example-wrap"><pre class="language-text"><code>  u8:  1111_1000 (248)  &gt;&gt; 1  =  0111_1100 (124)
+  i8:  1111_1000 (-8)   &gt;&gt; 1  =  1111_1100 (-4)</code></pre></div>
+<p><strong>Negating by hand</strong> (rarely needed): flip every bit, then add 1.</p>
+<div class="example-wrap"><pre class="language-text"><code>   5  = 0000_0101
+  flip  1111_1010
+  +1    1111_1011  = -5</code></pre></div>
+<p><strong>Two signed surprises.</strong></p>
+<ul>
+<li>There is one more negative number than positive: <code>i8</code> goes down to -128 but
+only up to +127 (in the 3-bit world: down to -4, up to +3). So -128 has no
+positive partner, and <code>(-128_i8).abs()</code> and <code>-128_i8 / -1</code> overflow.</li>
+<li>Division rounds toward zero, and <code>%</code> keeps the sign of the left number:
+<code>-7 / 2 = -3</code> and <code>-7 % 2 = -1</code>. For a remainder that is never negative
+(e.g. to use as an array index), use <code>rem_euclid</code>: <code>(-7_i32).rem_euclid(2) = 1</code>.</li>
+</ul>
+<p><strong>Why this crate uses unsigned types</strong> (<code>usize</code>, <code>u32</code>, <code>u64</code>): indexes,
+counters and bit patterns are never negative. With unsigned types, <code>&amp;</code> masks,
+<code>&gt;&gt;</code> shifts and wrap-around all behave exactly like the pictures above, with
+no sign bit to worry about.</p>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="aba/index.html" title="mod lockfree::aba">aba</a></dt><dd>The ABA problem, made reproducible.</dd><dt><a class="mod" href="padded/index.html" title="mod lockfree::padded">padded</a></dt><dd>Cache-line padding.</dd><dt><a class="mod" href="spsc/index.html" title="mod lockfree::spsc">spsc</a></dt><dd>A bounded, wait-free single-producer / single-consumer ring buffer.</dd></dl></section></div></main></body></html>

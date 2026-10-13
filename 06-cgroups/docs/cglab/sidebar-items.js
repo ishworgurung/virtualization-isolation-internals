@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MIB"],"fn":["clean","effective_cpu_limit","gomaxprocs","header","info","jail","limits","main","nip","print_events","run","weight","worker","worker_argv"],"mod":["cg"]};

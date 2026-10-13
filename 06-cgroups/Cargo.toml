@@ -1,0 +1,11 @@
+[package]
+name = "cglab"
+version = "0.1.0"
+edition = "2021"
+description = "A hands-on cgroup v2 lab: limits, PSI, the no-internal-process rule, jailer-style confinement"
+
+# std only, on purpose: cgroups are just files, so File I/O is the whole API.
+# Build:  cargo build --release   ->  ./target/release/cglab <command>
+
+[profile.release]
+opt-level = 3   # the CPU-burning worker should run at full speed

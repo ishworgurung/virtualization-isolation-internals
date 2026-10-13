@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CGROOT"],"fn":["delegated_root","is_root","is_v2","own_cgroup","spawn_in","wait_timeout"],"struct":["Group","Sandbox"]};

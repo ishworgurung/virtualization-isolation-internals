@@ -1,0 +1,128 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A bounded, wait-free single-producer / single-consumer ring buffer."><title>lockfree::spsc - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="lockfree" data-themes="" data-resource-suffix="" data-rustdoc-version="1.101.0-nightly (32dba69d6 2026-10-09)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module spsc</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../lockfree/index.html">lockfree</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module spsc</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#what-problem-it-solves" title="What problem it solves">What problem it solves</a></li><li><a href="#refresher-the-ring-buffer-circular-buffer" title="Refresher: the ring buffer (circular buffer)">Refresher: the ring buffer (circular buffer)</a></li><li><a href="#why-this-needs-no-lock-and-no-cas" title="Why this needs no lock and no CAS">Why this needs no lock and no CAS</a></li><li><a href="#free-running-counters-masks-and-wrap-around" title="Free-running counters, masks and wrap-around">Free-running counters, masks and wrap-around</a></li><li><a href="#memory-ordering--the-whole-game" title="Memory ordering — the whole game">Memory ordering — the whole game</a></li><li><a href="#two-performance-details" title="Two performance details">Two performance details</a></li><li><a href="#rust-types-used-here-briefly" title="Rust types used here, briefly">Rust types used here, briefly</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate lockfree</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">lockfree</a></div><h1>Module <span>spsc</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/lockfree/spsc.rs.html#1-396">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A bounded, wait-free single-producer / single-consumer ring buffer.</p>
+<p>This is the data structure behind virtio virtqueues, io_uring’s SQ/CQ and
+most audio/network fast paths.</p>
+<h3 id="what-problem-it-solves"><a class="doc-anchor" href="#what-problem-it-solves">§</a>What problem it solves</h3>
+<p>One thread (the <strong>producer</strong>) creates items; another (the <strong>consumer</strong>)
+processes them, in the same order (<strong>FIFO</strong>: first in, first out). They run
+at different speeds, so we need a waiting room between them: a <strong>queue</strong>.
+“Bounded” means the queue has a fixed maximum size; when it is full, <code>push</code>
+fails instead of allocating more memory. “Single-producer/single-consumer”
+(SPSC) means exactly one thread pushes and exactly one thread pops.</p>
+<h3 id="refresher-the-ring-buffer-circular-buffer"><a class="doc-anchor" href="#refresher-the-ring-buffer-circular-buffer">§</a>Refresher: the ring buffer (circular buffer)</h3>
+<p>A queue stored in a fixed array. Two positions: <strong>head</strong> (where the next
+item will be read) and <strong>tail</strong> (where the next item will be written).
+Push writes at tail and moves tail forward; pop reads at head and moves
+head forward. When a position reaches the end of the array, it wraps to
+slot 0 — the array is used as if it were a circle:</p>
+<div class="example-wrap"><pre class="language-text"><code>  capacity 8, after pushing 1..=6 and popping 1..=2:
+
+  slot:   0   1   2   3   4   5   6   7
+        [ .   .   3   4   5   6   .   . ]
+                  ^               ^
+                 head=2          tail=6          fill = 6 - 2 = 4
+
+  push 7, 8, 9: tail passes the end and wraps to slot 0
+
+  slot:   0   1   2   3   4   5   6   7
+        [ 9   .   3   4   5   6   7   8 ]
+              ^   ^
+         tail=9  head=2      (tail as a counter is 9; its slot is 9 % 8 = 1)</code></pre></div>
+<p>Nothing is ever shifted or copied around; only the two positions move.
+Both push and pop are O(1).</p>
+<h3 id="why-this-needs-no-lock-and-no-cas"><a class="doc-anchor" href="#why-this-needs-no-lock-and-no-cas">§</a>Why this needs no lock and no CAS</h3>
+<p>Each index has exactly <strong>one writer</strong>:</p>
+<div class="example-wrap"><pre class="language-text"><code>  slots:   [ . . X X X X . . ]
+                 ^       ^
+               head      tail
+        consumer writes   producer writes
+        (pop advances)    (push advances)</code></pre></div>
+<ul>
+<li><code>tail</code> — next slot the producer will fill. Only the producer stores it.</li>
+<li><code>head</code> — next slot the consumer will read. Only the consumer stores it.</li>
+</ul>
+<p>Each side only <em>reads</em> the other side’s index, to learn how far it may go.
+Two threads never race to write the same variable, so plain atomic loads
+and stores are enough; no compare-and-swap is needed.</p>
+<h3 id="free-running-counters-masks-and-wrap-around"><a class="doc-anchor" href="#free-running-counters-masks-and-wrap-around">§</a>Free-running counters, masks and wrap-around</h3>
+<p><code>head</code> and <code>tail</code> are <strong>free-running</strong> <code>usize</code> counters: they count every
+item ever pushed/popped and are never reduced mod capacity. The actual slot
+is <code>counter &amp; mask</code>, where <code>mask = capacity - 1</code> (capacity is a power of two;
+see the bits refresher in <code>lib.rs</code>):</p>
+<div class="example-wrap"><pre class="language-text"><code>  capacity 8 -&gt; mask 7 = 0b0111
+  counter 13 = 0b1101;  13 &amp; 0b0111 = 0b0101 = 5   (same as 13 % 8)</code></pre></div>
+<ul>
+<li>fill level = <code>tail.wrapping_sub(head)</code></li>
+<li>empty ⇔ <code>tail == head</code></li>
+<li>full  ⇔ <code>tail - head == capacity</code></li>
+</ul>
+<p>This removes the classic “keep one slot empty to tell full from empty”
+trick: if you stored slot numbers (0..cap) instead of counters, an empty
+ring and a full ring would both have <code>head == tail</code>.</p>
+<p><strong>Why <code>wrapping_sub</code> is still right after the counter overflows.</strong> A
+<code>usize</code> counter wraps back to 0 after 2^64 increments (at a billion pushes a
+second, that takes ~584 years, but correctness should not depend on that).
+The same thing, shrunk to a <code>u8</code> so the numbers are readable (u8 wraps at
+256):</p>
+<div class="example-wrap"><pre class="language-text"><code>  head = 254, then 3 pushes: tail = 254 + 3 = 257 -&gt; wraps to 1
+  tail - head = 1 - 254 = -253 -&gt; as u8 (mod 256): 256 - 253 = 3   correct!</code></pre></div>
+<p>Subtraction mod 2^N gives the right distance as long as the true distance is
+below 2^N, which it always is (it is at most the capacity).</p>
+<h3 id="memory-ordering--the-whole-game"><a class="doc-anchor" href="#memory-ordering--the-whole-game">§</a>Memory ordering — the whole game</h3>
+<p>Modern CPUs and compilers reorder memory accesses whenever a <em>single</em> thread
+cannot tell the difference. Another thread can. Orderings tell both what
+must not be reordered:</p>
+<p>Push:  write the slot, then <code>tail.store(.., Release)</code>.
+Pop:   <code>tail.load(Acquire)</code>, then read the slot.</p>
+<p>Analogy: the producer puts a parcel in a locker (writes the slot), then
+raises a flag (stores tail). The consumer waits for the flag, then opens the
+locker. Without ordering, the flag could be raised before the parcel is in
+the locker, and the consumer would find it empty.</p>
+<p>The Release store “publishes” every write that came before it in program
+order (the slot contents). The Acquire load that observes the new <code>tail</code>
+<em>synchronises-with</em> it, guaranteeing the slot contents are visible. With
+<code>Relaxed</code> on both sides the consumer could see the new <code>tail</code> but stale slot
+bytes — on ARM/POWER for real, on x86 only via compiler reordering.</p>
+<p>The symmetric edge protects the <em>reuse</em> of a slot: the consumer finishes
+reading, then <code>head.store(.., Release)</code>; the producer’s <code>head.load(Acquire)</code>
+guarantees it will not overwrite a slot still being read.</p>
+<div class="example-wrap"><pre class="language-text"><code>  producer                              consumer
+  --------                              --------
+  buf[t &amp; mask] = value
+  tail.store(t+1, Release)  ─────────▶  tail.load(Acquire) sees t+1
+                                        value = buf[h &amp; mask]
+  head.load(Acquire) sees h+1  ◀──────  head.store(h+1, Release)
+  (now slot h may be overwritten)</code></pre></div>
+<p>On x86-64 an Acquire load and a Release store compile to ordinary <code>mov</code>
+instructions (the hardware already provides that ordering); they only stop
+the <em>compiler</em> from reordering. On ARM64 they become <code>ldar</code>/<code>stlr</code>.</p>
+<h3 id="two-performance-details"><a class="doc-anchor" href="#two-performance-details">§</a>Two performance details</h3>
+<ol>
+<li><strong>Cache-line padding</strong> of <code>head</code> and <code>tail</code> (see <a href="../padded/index.html" title="mod lockfree::padded"><code>crate::padded</code></a>): they
+are written by different cores, so sharing a line would false-share.</li>
+<li><strong>Cached remote index.</strong> Loading the other side’s index pulls its cache
+line across cores. Each side keeps a private copy and only re-reads the
+real one when the ring <em>looks</em> full/empty. Under steady load this cuts
+cross-core traffic to about one line transfer per <em>batch</em> instead of per item.</li>
+</ol>
+<h3 id="rust-types-used-here-briefly"><a class="doc-anchor" href="#rust-types-used-here-briefly">§</a>Rust types used here, briefly</h3>
+<ul>
+<li><code>Arc&lt;T&gt;</code> — a reference-counted pointer that can be shared between
+threads. <code>Producer</code> and <code>Consumer</code> each hold one; the <code>Shared</code> state is
+freed when the <em>last</em> of them is dropped.</li>
+<li><code>Box&lt;[T]&gt;</code> — a fixed-size heap array (like <code>Vec&lt;T&gt;</code> without the ability to
+grow).</li>
+<li><code>UnsafeCell&lt;T&gt;</code> — the only legal way in Rust to mutate something through a
+shared reference <code>&amp;</code>. Normally <code>&amp;</code> means “read-only”; <code>UnsafeCell</code> opts out
+and makes <em>you</em> responsible for preventing data races.</li>
+<li><code>MaybeUninit&lt;T&gt;</code> — room for a <code>T</code> that may or may not currently hold a
+value. Rust never reads or drops it on its own; we track which slots are
+full (the ones in <code>[head, tail)</code>).</li>
+<li><code>unsafe { .. }</code> — “compiler, I have checked the rules you can’t check”.
+Every <code>unsafe</code> block below has a <code>SAFETY:</code> comment saying why it holds.</li>
+<li><code>Result&lt;(), T&gt;</code> / <code>Option&lt;T&gt;</code> — Rust’s way to return “success or failure”
+and “a value or nothing” without exceptions or null.</li>
+</ul>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Consumer.html" title="struct lockfree::spsc::Consumer">Consumer</a></dt><dd>The receiving half. Also not <code>Clone</code>.</dd><dt><a class="struct" href="struct.Producer.html" title="struct lockfree::spsc::Producer">Producer</a></dt><dd>The sending half. Not <code>Clone</code> — exactly one producer is the invariant that
+makes this lock-free without CAS. <code>push</code> takes <code>&amp;mut self</code>, so the type
+system also prevents two threads from pushing through the same handle.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.channel.html" title="fn lockfree::spsc::channel">channel</a></dt><dd>Create a ring holding at least <code>capacity</code> items (rounded up to a power of two
+so that <code>&amp; mask</code> replaces <code>%</code>; minimum 2).</dd></dl></section></div></main></body></html>

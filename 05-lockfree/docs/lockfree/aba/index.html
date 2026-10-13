@@ -1,0 +1,73 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The ABA problem, made reproducible."><title>lockfree::aba - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="lockfree" data-themes="" data-resource-suffix="" data-rustdoc-version="1.101.0-nightly (32dba69d6 2026-10-09)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module aba</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../lockfree/index.html">lockfree</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module aba</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#refresher-stack-linked-list-arena" title="Refresher: stack, linked list, arena">Refresher: stack, linked list, arena</a></li><li><a href="#refresher-the-cas-retry-loop" title="Refresher: the CAS retry loop">Refresher: the CAS retry loop</a></li><li><a href="#the-bug" title="The bug">The bug</a></li><li><a href="#the-fix-tagged-versioned-heads" title="The fix: tagged (versioned) heads">The fix: tagged (versioned) heads</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate lockfree</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">lockfree</a></div><h1>Module <span>aba</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/lockfree/aba.rs.html#1-315">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The ABA problem, made reproducible.</p>
+<h3 id="refresher-stack-linked-list-arena"><a class="doc-anchor" href="#refresher-stack-linked-list-arena">§</a>Refresher: stack, linked list, arena</h3>
+<p>A <strong>stack</strong> is LIFO (last in, first out), like a pile of plates: <code>push</code> puts
+an item on top, <code>pop</code> takes the top one off.</p>
+<p>A <strong>singly linked list</strong> stores each item in a <em>node</em> that also holds a link
+(“next”) to the node below it. The list itself is just a pointer to the top
+node, called <code>head</code>. The bottom node’s next is a special “nothing” value
+(<code>NIL</code> here, <code>null</code> in C):</p>
+<div class="example-wrap"><pre class="language-text"><code>  head ──▶ [A | next] ──▶ [B | next] ──▶ [C | next = NIL]
+  top of stack                            bottom of stack</code></pre></div>
+<ul>
+<li>push(X): set <code>X.next = head</code>, then <code>head = X</code>.</li>
+<li>pop():   remember <code>top = head</code>, then <code>head = top.next</code>, return <code>top</code>.</li>
+</ul>
+<p>Both are O(1) and only ever change <em>one</em> shared variable, <code>head</code>. That is
+what makes a lock-free version possible.</p>
+<p>An <strong>arena</strong> is a fixed array (<code>Vec&lt;Node&gt;</code>) that owns all the nodes. Instead
+of pointers we use <strong>indices</strong> into it: “node 2” means <code>nodes[2]</code>. Nothing
+is ever allocated or freed, which keeps the demo memory-safe.</p>
+<h3 id="refresher-the-cas-retry-loop"><a class="doc-anchor" href="#refresher-the-cas-retry-loop">§</a>Refresher: the CAS retry loop</h3>
+<p>With several threads, “read <code>head</code>, then write <code>head</code>” is broken: another
+thread may change <code>head</code> in between, and our write would erase its work.
+The lock-free pattern is:</p>
+<div class="example-wrap"><pre class="language-text"><code>  loop {
+      old = head.load()                 // 1. look
+      new = compute from old            // 2. prepare, privately
+      if CAS(head, old, new) succeeds:  // 3. &quot;if head is STILL old, set it to new&quot;
+          done
+      // else someone changed head since step 1: start over with fresh data
+  }</code></pre></div>
+<p>A <strong>Treiber stack</strong> (R. K. Treiber, 1986) is exactly that loop applied to a
+linked-list stack.</p>
+<h3 id="the-bug"><a class="doc-anchor" href="#the-bug">§</a>The bug</h3>
+<p>CAS checks the <strong>value</strong>, not the <strong>history</strong>. If X goes A → B → A between
+your read and your CAS, the CAS succeeds — but the world it was justified by
+no longer exists.</p>
+<div class="example-wrap"><pre class="language-text"><code>  pop():  old = head            // A
+          next = old.next       // B          &lt;-- decided based on THIS
+          ...another thread runs here...
+          CAS(head, old, next)  // &quot;head is still A? then head = B&quot;</code></pre></div>
+<p>If, meanwhile, another thread pops A, pops B, and pushes A back, <code>head</code> is A
+again and the CAS succeeds — installing <strong>B</strong>, a node that is no longer in
+the stack. Node C is lost, B is double-owned. Step by step:</p>
+<div class="example-wrap"><pre class="language-text"><code>  start:                 head ─▶ A ─▶ B ─▶ C
+  T1 reads:              old = A, next = B       ... T1 pauses
+  T2 pops A:             head ─▶ B ─▶ C
+  T2 pops B:             head ─▶ C               (T2 now owns B, reuses it:
+                                                  B.next = NIL)
+  T2 pushes A:           head ─▶ A ─▶ C
+  T1 resumes: CAS(head, A, B): head IS A, so it succeeds!
+  result:                head ─▶ B ─▶ NIL        C is lost, B belongs to T2</code></pre></div>
+<p>With raw pointers this is also a use-after-free (B’s memory may be freed and
+reused). Here we use an index-based arena, so it is a pure <em>logic</em> error, but
+the mechanics are identical and — unlike the real thing — perfectly
+deterministic: <a href="struct.TreiberStack.html#method.pop_with_hook" title="method lockfree::aba::TreiberStack::pop_with_hook"><code>TreiberStack::pop_with_hook</code></a> runs a closure between the
+read and the CAS so a “second thread” can be injected at exactly that point.
+Rust’s type system does not catch this: every access is a well-defined
+atomic operation, so there is no <em>data race</em>, only a wrong algorithm.</p>
+<h3 id="the-fix-tagged-versioned-heads"><a class="doc-anchor" href="#the-fix-tagged-versioned-heads">§</a>The fix: tagged (versioned) heads</h3>
+<p>Pack a generation counter next to the index and bump it on every successful
+CAS. Then A→B→A is really (A,1)→(B,2)→(A,3); the stale CAS expects (A,1)
+and fails. Other cures: hazard pointers, epoch-based reclamation (crossbeam),
+or never reusing nodes while readers may hold them.
+(A 32-bit tag can in principle wrap around after 2^32 successful operations
+during one stalled pop; in practice that window is considered negligible.
+With real 64-bit pointers there is no room for a tag in one word, so
+implementations either steal unused pointer bits or use a double-width CAS
+such as x86-64’s <code>cmpxchg16b</code>.)</p>
+<p>Why pack both into ONE <code>u64</code> instead of two separate atomics? CAS compares
+and swaps one memory word. Index and tag must be checked <em>together</em>, in a
+single indivisible step; two separate CASes would reopen a gap in between.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.TreiberStack.html" title="struct lockfree::aba::TreiberStack">Treiber<wbr>Stack</a></dt><dd>A Treiber stack over a fixed arena of nodes identified by index.</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Pop.html" title="enum lockfree::aba::Pop">Pop</a></dt><dd>What a single pop <em>attempt</em> did.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.NIL.html" title="constant lockfree::aba::NIL">NIL</a></dt><dd>“No node” marker: <code>u32::MAX</code> = 0xFFFF_FFFF = 4_294_967_295. No arena here is
+that large, so it can never collide with a real index.</dd></dl></section></div></main></body></html>
